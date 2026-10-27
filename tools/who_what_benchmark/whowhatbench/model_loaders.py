@@ -70,7 +70,7 @@ def _resolve_torch_dtype(dtype):
 def _sanitize_load_kwargs(model_type, use_hf, use_genai, use_llamacpp, kwargs):
     sanitized_kwargs = dict(kwargs)
     n_ctx = sanitized_kwargs.get("llamacpp_n_ctx")
-    is_text_task = model_type in ("text", "text-chat")
+    is_text_task = model_type in ("text", "text-chat", "text-agent")
     is_llamacpp_text_backend = is_text_task and use_llamacpp and not use_hf and not use_genai
 
     if not use_llamacpp:

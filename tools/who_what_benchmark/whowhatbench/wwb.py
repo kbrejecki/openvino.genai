@@ -285,13 +285,13 @@ def parse_args():
     parser.add_argument(
         "--llamacpp-chat",
         action="store_true",
-        help="Use llama.cpp chat-completions API for model-type 'text'.",
+        help="Use llama.cpp chat-completions API for model-type 'text'. Agent prompts are already templated.",
     )
     parser.add_argument(
         "--llamacpp-n-ctx",
         type=positive_integer,
         default=None,
-        help="Context window size for llama.cpp backend in model-type 'text' (default: 8192 with --llamacpp).",
+        help="Context window size for llama.cpp backend in model-type 'text' or 'text-agent' (default: 8192).",
     )
     parser.add_argument(
         "--image-size",
@@ -603,8 +603,10 @@ def check_args(args):
     if sum(bool(flag) for flag in backend_flags) > 1:
         raise ValueError("Options --hf, --genai and --llamacpp are mutually exclusive")
 
-    if args.llamacpp and args.model_type != "text":
-        raise ValueError("--llamacpp is supported only with --model-type text")
+    if args.llamacpp and args.model_type not in ("text", "text-agent"):
+        raise ValueError("--llamacpp is supported only with --model-type text or text-agent")
+    if args.llamacpp and args.model_type == "text-agent" and not (args.chat_template_source or args.tokenizer):
+        raise ValueError("llama.cpp text-agent requires --chat-template-source or --tokenizer for prompt rendering")
 
     if args.llamacpp_n_ctx is not None and not args.llamacpp:
         raise ValueError("--llamacpp-n-ctx requires --llamacpp")
@@ -667,6 +669,9 @@ def load_agent_dataset(args):
 
 
 def load_tokenizer(args):
+    if args.llamacpp and args.model_type == "text-agent" and args.tokenizer is None:
+        return None
+
     # Define kwargs based on args attributes
     kwargs = {}
     if args.gguf_file:
@@ -675,7 +680,7 @@ def load_tokenizer(args):
 
     tokenizer = None
     if args.tokenizer is not None:
-        if args.llamacpp:
+        if args.llamacpp and args.model_type != "text-agent":
             from llama_cpp.llama_tokenizer import LlamaHFTokenizer
             tokenizer = LlamaHFTokenizer.from_pretrained(args.tokenizer, **kwargs)
         else:
@@ -1291,6 +1296,7 @@ def create_evaluator(base_model, args):
                 ),
                 is_genai_backend=args.genai,
                 chat_template_source=args.chat_template_source,
+                is_llamacpp_backend=args.llamacpp,
             )
         elif task == "text-to-image":
             return EvaluatorCLS(

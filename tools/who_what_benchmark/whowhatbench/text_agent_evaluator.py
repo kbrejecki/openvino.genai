@@ -15,6 +15,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from .registry import BaseEvaluator, register_evaluator
+from .text_generation_strategies import LlamaCPPGeneration
 from .utils import get_ignore_parameters_flag, patch_awq_for_inference
 from .whowhat_metrics import TextDivergency, TextSimilarity
 
@@ -39,9 +40,12 @@ class TextAgentEvaluator(BaseEvaluator):
         assistant_confidence_threshold: float = 0.0,
         is_genai_backend: bool = False,
         chat_template_source: Optional[str] = None,
+        is_llamacpp_backend: bool = False,
     ) -> None:
         if base_model is None and gt_data is None:
             raise ValueError("Text generation pipeline for evaluation or ground truth data must be defined")
+        if is_genai_backend and is_llamacpp_backend:
+            raise ValueError("GenAI and llama.cpp agent backends are mutually exclusive")
 
         self.test_data = test_data
         self.metrics = metrics
@@ -53,6 +57,7 @@ class TextAgentEvaluator(BaseEvaluator):
         self.num_assistant_tokens = num_assistant_tokens
         self.assistant_confidence_threshold = assistant_confidence_threshold
         self.is_genai_backend = is_genai_backend
+        self.is_llamacpp_backend = is_llamacpp_backend
         self.chat_template_source = chat_template_source
         self.gt_dir = os.path.dirname(gt_data or "")
         self.target_dir = None
@@ -422,6 +427,18 @@ class TextAgentEvaluator(BaseEvaluator):
         answer_tokens = tokens[:, inputs["input_ids"].shape[-1] :]
         return tokenizer.batch_decode(answer_tokens, skip_special_tokens=True)[0]
 
+    def _generate_llamacpp(self, model, tokenizer, record: Dict[str, Any], chat_template: Optional[str]) -> str:
+        prompt = self._build_templated_prompt(
+            tokenizer, record["messages"], record.get("tools"), chat_template, backend_name="llama.cpp"
+        )
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("Rendered llama.cpp agent prompt cannot be empty")
+        result = LlamaCPPGeneration().run_generation(
+            model, tokenizer, prompt, self._record_max_new_tokens(record),
+            skip_question=True, use_chat_template=False,
+        )
+        return result.answer_text
+
     def _generate_genai(self, model, _tokenizer, record: Dict[str, Any], chat_template: Optional[str]) -> str:
         import openvino_genai
 
@@ -511,7 +528,10 @@ class TextAgentEvaluator(BaseEvaluator):
 
     def _generate_data(self, model, gen_answer_fn=None, result_dir=None):
         if gen_answer_fn is None:
-            gen_answer_fn = self._generate_genai if self.is_genai_backend else self._generate_non_genai
+            if self.is_llamacpp_backend:
+                gen_answer_fn = self._generate_llamacpp
+            else:
+                gen_answer_fn = self._generate_genai if self.is_genai_backend else self._generate_non_genai
 
         chat_template = self._load_chat_template(model, self.tokenizer)
 
